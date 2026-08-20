@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drama in Babyface's songs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400;6..96,500&family=Archivo:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0F0C0B; --panel:#181311; --rule:#2C2523; --dim:#6E635C;
+    --bone:#EFE8E1; --amber:#F0A536; --red:#E5432F;
+    --display:"Bodoni Moda",Georgia,serif;
+    --ui:"Archivo",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--ink); color:var(--bone); font-family:var(--ui);
+    display:flex; align-items:center; justify-content:center; padding:34px;
+    -webkit-font-smoothing:antialiased; cursor:pointer; overflow:hidden;
+  }
+  .stage{width:min(1120px,100%)}
+  h1{
+    font-family:var(--display); font-weight:400;
+    font-size:clamp(24px,3vw,38px); line-height:1.1; letter-spacing:-.005em;
+    margin:0 0 16px;
+  }
+  h1 em{font-style:italic; color:var(--amber); transition:color .12s linear}
+  h1 em.hit{color:var(--red)}
+  .plot{position:relative; width:100%; aspect-ratio:16/8.4; min-height:330px}
+  canvas{width:100%; height:100%; display:block}
+  .now{
+    position:absolute; top:2px; left:50%; transform:translateX(-50%);
+    font-family:var(--display); font-size:clamp(28px,3.6vw,44px); line-height:1;
+    font-variant-numeric:tabular-nums lining-nums; color:var(--bone);
+    pointer-events:none; white-space:nowrap;
+  }
+  body:focus-visible{outline:2px solid var(--amber); outline-offset:-6px}
+</style>
+</head>
+<body tabindex="0" title="Click to replay">
+<div class="stage">
+  <h1>Drama in <em id="em">Babyface</em>&rsquo;s songs</h1>
+  <div class="plot">
+    <div class="now" id="now">1986</div>
+    <canvas id="c"></canvas>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- data ------------------------------------------------------------
+  var DATA = [
+    { year:1986, album:"Lovers",                     n:0,  file:"1986-lovers.jpg" },
+    { year:1989, album:"Tender Lover",               n:0,  file:"1989-tender-lover.jpg" },
+    { year:1993, album:"For the Cool in You",        n:0,  file:"1993-for-the-cool-in-you.jpg" },
+    { year:1996, album:"The Day",                    n:0,  file:"1996-the-day.jpg" },
+    { year:2001, album:"Face2Face",                  n:2,  file:"2001-face2face.jpg" },
+    { year:2005, album:"Grown & Sexy",               n:13, file:"2005-grown-and-sexy.jpg" },
+    { year:2007, album:"Playlist",                   n:0,  file:"2007-playlist.jpg" },
+    { year:2015, album:"Return of the Tender Lover", n:3,  file:"2015-return-of-the-tender-lover.jpg" }
+  ];
+  var RATE = 2.2, WINDOW = 8, HEAD = 1.14;
+  var TRAIL_YEARS = 3.0;                       // keep scrolling past the last album
+  var LEAD = 700, ZOOM_GAP = 350, ZOOM_DUR = 1400, TAIL = 2000;
+  // ----------------------------------------------------------------------
+
+  var C = { ink:"#0F0C0B", panel:"#181311", rule:"#2C2523", dim:"#6E635C",
+            bone:"#EFE8E1", amber:"#F0A536", red:"#E5432F" };
+
+  var run = 0;
+  DATA.forEach(function (d) {
+    run += d.n; d.cum = run;
+    d.img = new Image();
+    d.img.onload = function () { d.ok = true; };
+    d.img.src = "covers/" + d.file;
+  });
+  var T0 = DATA[0].year, T1 = DATA[DATA.length-1].year, TOTAL = run;
+  var TEND = T1 + TRAIL_YEARS;
+  var START_CEIL = DATA.filter(function (d) { return d.cum > 0; })[0].cum * HEAD;
+  var BIG = Math.max.apply(null, DATA.map(function (d) { return d.n; }));
+  var reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  var SWEEP = (TEND - T0) / RATE * 1000;
+  var END_SWEEP = LEAD + SWEEP;
+  var ZOOM_AT   = END_SWEEP + ZOOM_GAP;
+  var LABELS_AT = ZOOM_AT + ZOOM_DUR - 250;
+  var RUN = LABELS_AT + (DATA.length - 1) * 55 + 400 + TAIL;
+
+  var cv = document.getElementById("c"), ctx = cv.getContext("2d");
+  var elNow = document.getElementById("now"), elEm = document.getElementById("em");
+  var W = 0, H = 0, PAD = { l:56, r:44, t:96, b:52 };
+
+  function resize() {
+    var r = cv.getBoundingClientRect(), dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = r.width; H = r.height;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    elNow.style.left = ((PAD.l + W - PAD.r) / 2).toFixed(1) + "px";
+    vig = null;
+  }
+
+  var view = { a: T0 - WINDOW/2, b: T0 + WINDOW/2 };
+  var sx = function (t) { return PAD.l + (t - view.a) / (view.b - view.a) * (W - PAD.l - PAD.r); };
+  var sy = function (v, ceil) { return H - PAD.b - (v / ceil) * (H - PAD.t - PAD.b); };
+
+  function ticksFor(ceil) {
+    var raw = ceil / 5, mag = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 0.1)))), step = 0;
+    [1, 2, 5, 10].some(function (m) { if (m * mag >= raw) { step = m * mag; return true; } });
+    step = Math.max(1, Math.round(step || mag * 10));
+    var out = [];
+    for (var v = 0; v <= ceil + 0.001; v += step) out.push(Math.round(v));
+    return out;
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x+r, y); ctx.arcTo(x+w, y, x+w, y+h, r); ctx.arcTo(x+w, y+h, x, y+h, r);
+    ctx.arcTo(x, y+h, x, y, r); ctx.arcTo(x, y, x+w, y, r); ctx.closePath();
+  }
+
+  function cover(d, cx, cy, size, alpha, active) {
+    var x = cx - size/2, y = cy - size/2;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    roundRect(x, y, size, size, 3);
+    ctx.fillStyle = C.panel; ctx.fill();
+    if (d.ok) { ctx.save(); ctx.clip(); ctx.drawImage(d.img, x, y, size, size); ctx.restore(); }
+    else {
+      ctx.fillStyle = C.dim;
+      ctx.font = '11px Archivo, system-ui, sans-serif';
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(String(d.year), cx, cy);
+    }
+    roundRect(x, y, size, size, 3);
+    ctx.lineWidth = active ? 2 : 1;
+    ctx.strokeStyle = active ? C.amber : C.rule;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ---- impact effects ---------------------------------------------------
+  var shake = null, rings = [], embers = [], ghosts = null, flash = null, vig = null;
+  var punch = null;
+
+  function impact(d, e) {
+    var mag = d.n / BIG;
+    punch = { born:e, dur: 620, mag: mag };
+    shake = { born:e, dur: 240 + 320*mag, amp: 3 + 15*mag };
+    rings.push({ cum:d.cum, year:d.year, born:e, dur: 620, r: 26 + 90*mag });
+    flash = { cum:d.cum, prev:d.cum - d.n, year:d.year, born:e, dur: 260 };
+    var count = Math.round(6 + 26 * mag);
+    for (var i = 0; i < count; i++) {
+      embers.push({
+        year:d.year, cum:d.cum, born:e,
+        life: 700 + Math.random()*900,
+        ox:(Math.random()-0.5)*22, oy:(Math.random()-0.5)*10,
+        vx:(Math.random()-0.5)*70, vy:-(38 + Math.random()*118),
+        r: 0.9 + Math.random()*1.7
+      });
+    }
+    if (d.n >= BIG) {
+      elEm.classList.add("hit");
+      setTimeout(function () { elEm.classList.remove("hit"); }, 170);
+    }
+  }
+
+  function vignette() {
+    if (vig) return vig;
+    var g = ctx.createRadialGradient(W/2, H/2, Math.min(W,H)*0.22, W/2, H/2, Math.max(W,H)*0.74);
+    g.addColorStop(0, "rgba(15,12,11,0)");
+    g.addColorStop(1, "rgba(15,12,11,0.62)");
+    vig = g; return g;
+  }
+
+  var state = { t:T0, cum:0, ceil:START_CEIL, idx:-1, hitAt:{}, roll:0 };
+  var ceilTarget = START_CEIL, ceilFrom = START_CEIL, ceilAt = -1;
+
+  function draw(s, e) {
+    ctx.clearRect(0, 0, W, H);
+    var plotW = W - PAD.l - PAD.r;
+    var size = Math.max(30, Math.min(54, plotW / 9));
+
+    ctx.save();
+    if (shake) {
+      var sp = (e - shake.born) / shake.dur;
+      if (sp >= 1) shake = null;
+      else {
+        var damp = Math.pow(1 - sp, 2.1), a = shake.amp * damp;
+        ctx.translate((Math.random()-0.5)*a*2, (Math.random()-0.5)*a*1.5);
+      }
+    }
+
+    if (ghosts && e < ghosts.until) {
+      var ga = 1 - (e - ghosts.born) / (ghosts.until - ghosts.born);
+      ctx.save(); ctx.globalAlpha = ga * 0.45;
+      ghosts.ys.forEach(function (y) {
+        if (y < PAD.t - 26 || y > H - PAD.b + 1) return;
+        ctx.strokeStyle = C.red; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(PAD.l, y+0.5); ctx.lineTo(W - PAD.r, y+0.5); ctx.stroke();
+      });
+      ctx.restore();
+    }
+
+    ctx.font = '11px Archivo, system-ui, sans-serif';
+    ctx.textBaseline = "middle"; ctx.textAlign = "right";
+    ticksFor(s.ceil).forEach(function (v) {
+      var y = sy(v, s.ceil);
+      if (y < PAD.t - 26 || y > H - PAD.b + 1) return;
+      ctx.strokeStyle = C.rule; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(PAD.l, Math.round(y)+0.5); ctx.lineTo(W - PAD.r, Math.round(y)+0.5); ctx.stroke();
+      ctx.fillStyle = C.dim; ctx.fillText(String(v), PAD.l - 13, y);
+    });
+
+    var heroFade = 1 - Math.max(0, Math.min((e - ZOOM_AT + 120) / 420, 1));
+    if (heroFade > 0.01) {
+      var plotH = H - PAD.t - PAD.b;
+      var hp = punch ? (e - punch.born) / punch.dur : 1;
+      if (hp >= 1) { punch = null; hp = 1; }
+      var grow = punch ? 1 + 0.20 * punch.mag * Math.pow(1 - hp, 2.4) : 1;
+      var heat  = punch ? Math.pow(1 - hp, 3.2) : 0;
+      var fsize = Math.min(plotH * 0.62, 200) * grow;
+      ctx.save();
+      ctx.globalAlpha = heroFade * (0.15 + 0.55 * heat);
+      ctx.fillStyle = heat > 0.25 ? C.red : C.bone;
+      ctx.font = '500 ' + fsize.toFixed(0) + 'px "Bodoni Moda", Georgia, serif';
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(String(Math.round(s.roll)), PAD.l + plotW/2, PAD.t + plotH/2);
+      ctx.restore();
+    }
+
+    var pts = [[sx(view.a - 40), sy(0, s.ceil)]], prev = 0;
+    for (var i = 0; i <= s.idx; i++) {
+      var x = sx(DATA[i].year);
+      pts.push([x, sy(prev, s.ceil)]);
+      pts.push([x, sy(DATA[i].cum, s.ceil)]);
+      prev = DATA[i].cum;
+    }
+    pts.push([sx(s.t), sy(prev, s.ceil)]);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(PAD.l - 2, PAD.t - 34, plotW + 4, H - PAD.t - PAD.b + 35);
+    ctx.clip();
+
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], H - PAD.b);
+    pts.forEach(function (p) { ctx.lineTo(p[0], p[1]); });
+    ctx.lineTo(pts[pts.length-1][0], H - PAD.b);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(240,165,54,0.09)"; ctx.fill();
+
+    ctx.beginPath();
+    pts.forEach(function (p, i) { i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); });
+    ctx.strokeStyle = C.amber; ctx.lineWidth = 2.5;
+    ctx.lineJoin = "miter"; ctx.lineCap = "butt"; ctx.stroke();
+
+    if (flash) {
+      var fp = (e - flash.born) / flash.dur;
+      if (fp >= 1) flash = null;
+      else {
+        var fx = sx(flash.year);
+        ctx.save();
+        ctx.globalAlpha = Math.pow(1 - fp, 1.6);
+        ctx.strokeStyle = "#FFF3DE"; ctx.lineWidth = 4 - 2*fp; ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(fx, sy(flash.prev, s.ceil)); ctx.lineTo(fx, sy(flash.cum, s.ceil));
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    rings = rings.filter(function (r) { return e - r.born < r.dur; });
+    rings.forEach(function (r) {
+      var rp = (e - r.born) / r.dur;
+      ctx.save();
+      ctx.globalAlpha = Math.pow(1 - rp, 1.8) * 0.85;
+      ctx.strokeStyle = C.red; ctx.lineWidth = 2 - 1.2*rp;
+      ctx.beginPath();
+      ctx.arc(sx(r.year), sy(r.cum, s.ceil), 6 + r.r * rp, 0, Math.PI*2);
+      ctx.stroke();
+      ctx.restore();
+    });
+
+    embers = embers.filter(function (p) { return e - p.born < p.life; });
+    embers.forEach(function (p) {
+      var age = (e - p.born) / 1000, ep = (e - p.born) / p.life;
+      ctx.save();
+      ctx.globalAlpha = Math.pow(1 - ep, 1.5) * 0.9;
+      ctx.fillStyle = ep < 0.35 ? "#FFD9A0" : C.amber;
+      ctx.beginPath();
+      ctx.arc(sx(p.year) + p.ox + p.vx*age,
+              sy(p.cum, s.ceil) + p.oy + p.vy*age + 26*age*age,
+              p.r * (1 - ep*0.5), 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    });
+    ctx.restore();
+
+    ctx.strokeStyle = C.rule; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(PAD.l, Math.round(H - PAD.b)+0.5); ctx.lineTo(W - PAD.r, Math.round(H - PAD.b)+0.5); ctx.stroke();
+
+    for (var k = 0; k < DATA.length; k++) {
+      var hit = s.hitAt[k];
+      if (hit === undefined) continue;
+      var cxk = sx(DATA[k].year);
+      if (cxk < PAD.l - size || cxk > W - PAD.r + size) continue;
+      var ap = Math.min((e - hit) / 420, 1);
+      var pop = 1 + 0.26 * Math.sin(Math.min((e - hit)/300, 1) * Math.PI) * (1 - Math.min((e - hit)/300, 1)*0.45);
+      var cyc = sy(DATA[k].cum, s.ceil) - size/2 - 9;
+      cyc = Math.max(size/2 + 20, Math.min(cyc, H - PAD.b - size/2 - 6));
+      var clx = Math.max(PAD.l + size/2 - 8, Math.min(cxk, W - PAD.r - size/2 + 8));
+      cover(DATA[k], clx, cyc, size * pop, ap, k === s.idx);
+
+      var ya = (e - LABELS_AT - k * 55) / 400;
+      ya = Math.max(0, Math.min(ya, 1)) * ap;
+      if (ya > 0.01) {
+        ctx.save();
+        ctx.globalAlpha = ya;
+        ctx.font = '11px Archivo, system-ui, sans-serif';
+        ctx.fillStyle = C.dim; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+        ctx.fillText(String(DATA[k].year), clx, cyc - size/2 - 9);
+        ctx.restore();
+      }
+    }
+
+    for (var j = 0; j <= s.idx; j++) {
+      if (DATA[j].n === 0) continue;
+      var yv = sy(DATA[j].cum, s.ceil);
+      if (yv < PAD.t - 28) continue;
+      var px = sx(DATA[j].year), hot = DATA[j].n === BIG || DATA[j].cum === TOTAL;
+      if (px < PAD.l - size || px > W - PAD.r + size) continue;
+      var alx = Math.max(PAD.l + size/2 - 8, Math.min(px, W - PAD.r - size/2 + 8));
+      var gap = size/2 + 11;
+      var right = alx + gap > PAD.l + plotW - 48;
+      var va2 = Math.max(0, Math.min((e - LABELS_AT - j * 55) / 400, 1));
+      if (va2 <= 0.01) continue;
+      ctx.save();
+      ctx.globalAlpha = va2;
+      ctx.font = '500 ' + (hot ? 27 : 16) + 'px ' + (hot ? '"Bodoni Moda", Georgia, serif' : 'Archivo, system-ui, sans-serif');
+      ctx.fillStyle = hot ? C.red : C.bone;
+      ctx.textAlign = right ? "right" : "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillText(String(DATA[j].cum), alx + (right ? -gap : gap), yv - 7);
+      ctx.textBaseline = "middle";
+      ctx.restore();
+    }
+
+    var mfade = 1 - Math.max(0, Math.min((e - ZOOM_AT + 100) / 380, 1));
+    if (mfade > 0.01) {
+      var my = sy(s.cum, s.ceil), topEdge = PAD.t - 12, pinned = my < topEdge;
+      if (pinned) my = topEdge;
+      ctx.save(); ctx.globalAlpha = mfade;
+      ctx.beginPath();
+      ctx.arc(sx(s.t), my, pinned ? 7 : 5.5, 0, Math.PI*2);
+      ctx.fillStyle = pinned ? C.red : C.amber; ctx.fill();
+      ctx.lineWidth = 2.5; ctx.strokeStyle = C.ink; ctx.stroke();
+      ctx.restore();
+    }
+
+    ctx.restore();
+
+    ctx.fillStyle = vignette();
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function ease(x){ return x < .5 ? 4*x*x*x : 1 - Math.pow(-2*x+2,3)/2; }
+
+  var raf = null;
+  function play() {
+    if (raf) cancelAnimationFrame(raf);
+    resize();
+    state = { t:T0, cum:0, ceil:START_CEIL, idx:-1, hitAt:{}, roll:0 };
+    ceilTarget = ceilFrom = START_CEIL; ceilAt = -1;
+    shake = null; rings = []; embers = []; ghosts = null; flash = null; punch = null;
+    view.a = T0 - WINDOW/2; view.b = T0 + WINDOW/2;
+    elNow.textContent = String(T0); elNow.style.opacity = "1";
+
+    if (reduce) {
+      state.t = T1; state.cum = TOTAL; state.idx = DATA.length-1;
+      state.ceil = TOTAL * HEAD; state.roll = TOTAL;
+      DATA.forEach(function (d, i) { state.hitAt[i] = -9999; });
+      view.a = T0; view.b = T1;
+      elNow.style.opacity = "0";
+      draw(state, RUN); return;
+    }
+
+    var start = null;
+    function frame(ts) {
+      if (start === null) start = ts;
+      var e = ts - start;
+
+      var t = T0 + Math.max(0, Math.min((e - LEAD)/1000, SWEEP/1000)) * RATE;
+      if (t > TEND) t = TEND;
+
+      var idx = -1, cum = 0;
+      for (var i = 0; i < DATA.length; i++) {
+        if (DATA[i].year <= t + 0.0001) { idx = i; cum = DATA[i].cum; }
+      }
+      var wasIdx = state.idx;
+      state.t = t; state.idx = idx; state.cum = cum;
+      for (var k = 0; k <= idx; k++) if (state.hitAt[k] === undefined) state.hitAt[k] = e;
+      if (idx > wasIdx && idx >= 0 && DATA[idx].n > 0) impact(DATA[idx], e);
+
+      state.roll += (cum - state.roll) * 0.30;
+      if (Math.abs(cum - state.roll) < 0.4) state.roll = cum;
+
+      if (e < ZOOM_AT) { view.a = t - WINDOW/2; view.b = t + WINDOW/2; }
+      else {
+        var zf = ease(Math.min((e - ZOOM_AT) / ZOOM_DUR, 1));
+        view.a = (TEND - WINDOW/2) + (T0 - (TEND - WINDOW/2)) * zf;
+        view.b = (TEND + WINDOW/2) + (T1 - (TEND + WINDOW/2)) * zf;
+      }
+
+      if (ceilAt < 0 && cum > ceilTarget + 0.001) {
+        ghosts = { ys: ticksFor(state.ceil).map(function (v) { return Math.round(sy(v, state.ceil)); }),
+                   born: e, until: e + 620 };
+        ceilFrom = state.ceil; ceilTarget = cum * HEAD; ceilAt = e + 70;
+      }
+      if (ceilAt >= 0 && e >= ceilAt) {
+        var cf = Math.min((e - ceilAt)/300, 1);
+        state.ceil = ceilFrom + (ceilTarget - ceilFrom) * ease(cf);
+        if (cf >= 1) ceilAt = -1;
+      }
+
+      elNow.textContent = String(Math.min(Math.floor(t), T1));
+      elNow.style.opacity = (1 - Math.max(0, Math.min((e - ZOOM_AT + 120) / 420, 1))).toFixed(3);
+
+      draw(state, e);
+      if (e < RUN) raf = requestAnimationFrame(frame); else raf = null;
+    }
+    raf = requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("resize", function () { resize(); if (!raf) draw(state, RUN); });
+  document.body.addEventListener("click", play);
+  document.body.addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); play(); }
+  });
+  resize();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(play); else play();
+})();
+</script>
+</body>
+</html>
